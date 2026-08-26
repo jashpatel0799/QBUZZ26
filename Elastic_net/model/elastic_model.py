@@ -74,22 +74,29 @@ class ElasticDepthLM(nn.Module):
     def forward_blocks(self, x: torch.Tensor) -> Dict[int, torch.Tensor]:
         """Forward pass through all blocks, saving states at checkpoints."""
         hidden_states = {}
+        use_checkpoint = self.training and getattr(self, "gradient_checkpointing", False)
+        
         for i, layer in enumerate(self.layers):
-            x = layer(x)
+            if use_checkpoint:
+                from torch.utils.checkpoint import checkpoint
+                x = checkpoint(layer, x, use_reentrant=False)
+            else:
+                x = layer(x)
             # 1-indexed for block numbers (layer 0 is block 1)
             block_num = i + 1
             if block_num in self.exit_checkpoints:
                 hidden_states[block_num] = x
         return hidden_states
 
-    def forward(self, input_ids: torch.Tensor) -> Dict[int, torch.Tensor]:
-        """Forward pass during training (returns logits for all exits).
+    def forward(self, input_ids: torch.Tensor, return_hidden_states: bool = False) -> Dict[int, torch.Tensor]:
+        """Forward pass during training.
         
         Args:
             input_ids: Shape (batch, seq_len)
+            return_hidden_states: If True, return the enhanced hidden states instead of logits.
             
         Returns:
-            Dict mapping exit_checkpoint -> logits tensor of shape (batch, seq_len, vocab_size)
+            Dict mapping exit_checkpoint -> logits or hidden states
         """
         # Embeddings
         x = self.embed_tokens(input_ids)
@@ -100,6 +107,9 @@ class ElasticDepthLM(nn.Module):
         # Apply dense skip connections
         enhanced_hidden_states = self.skip_connections(raw_hidden_states)
         
+        if return_hidden_states:
+            return enhanced_hidden_states
+            
         # Compute logits for each exit using the shared head
         logits_dict = {}
         for k in self.exit_checkpoints:
@@ -139,3 +149,8 @@ class ElasticDepthLM(nn.Module):
         logits = self.lm_head(h_norm)
         
         return logits
+
+    def gradient_checkpointing_enable(self, **kwargs):
+        """Enable gradient checkpointing for all transformer layers."""
+        self.gradient_checkpointing = True
+

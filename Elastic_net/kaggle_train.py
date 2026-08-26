@@ -77,9 +77,8 @@ def main():
     model = model.to(device)
     
     if TRAIN_CONFIG["gradient_checkpointing"]:
-        # Optional: enable gradient checkpointing for memory saving
-        # model.gradient_checkpointing_enable() 
-        logger.info("Gradient checkpointing would be enabled here (requires specific wrapper implementation in blocks).")
+        model.gradient_checkpointing_enable()
+        logger.info("Gradient checkpointing enabled on all transformer blocks.")
         
     logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 

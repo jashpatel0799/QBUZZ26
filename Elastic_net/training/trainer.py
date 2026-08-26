@@ -99,24 +99,57 @@ class Trainer:
 
     def train_step(self, batch: torch.Tensor) -> Dict[str, float]:
         """Perform one training step."""
+        import torch.nn.functional as F
         self.model.train()
         batch = batch.to(self.device)
         
         weights = self.get_phase_weights()
+        exit_losses = {}
+        total_loss = 0.0
         
         with torch.amp.autocast(device_type=self.device.type, dtype=self.dtype, enabled=(self.device.type == "cuda")):
-            logits_dict = self.model(batch)
-            loss, exit_losses = multi_exit_loss(logits_dict, batch, weights, EXIT_CHECKPOINTS)
+            # Get hidden states instead of logits to save memory
+            hidden_states_dict = self.model(batch, return_hidden_states=True)
             
-            # Normalize loss for gradient accumulation
-            loss = loss / self.config["grad_accumulation_steps"]
+        # We loop through checkpoints and perform backward step-by-step
+        for i, exit_k in enumerate(self.model.exit_checkpoints):
+            if exit_k not in hidden_states_dict:
+                continue
+                
+            # Pop hidden states to free memory as early as possible
+            h = hidden_states_dict.pop(exit_k)
+            weight = weights[i]
             
-        self.scaler.scale(loss).backward()
-        
-        # We step the optimizer only after grad_accumulation_steps
-        # This logic is handled in the main training loop to keep this method simple
-        
-        metrics = {"train_loss_total": loss.item() * self.config["grad_accumulation_steps"]}
+            with torch.amp.autocast(device_type=self.device.type, dtype=self.dtype, enabled=(self.device.type == "cuda")):
+                # Project to logits for this exit only
+                h_norm = self.model.shared_lm_head_norm(h)
+                logits = self.model.lm_head(h_norm)
+                
+                # Compute loss for this exit
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = batch[..., 1:].contiguous()
+                
+                loss = F.cross_entropy(
+                    shift_logits.view(-1, shift_logits.size(-1)),
+                    shift_labels.view(-1),
+                    ignore_index=-100,
+                )
+                
+                # Scale loss by weight and gradient accumulation steps
+                scaled_loss = (loss * weight) / self.config["grad_accumulation_steps"]
+            
+            # Backward pass for this exit
+            is_last = (exit_k == self.model.exit_checkpoints[-1])
+            self.scaler.scale(scaled_loss).backward(retain_graph=not is_last)
+            
+            # Record metrics
+            exit_losses[exit_k] = loss.item()
+            total_loss += loss.item() * weight
+            
+            # Delete local variables to trigger garbage collection immediately
+            del h, h_norm, logits, shift_logits, shift_labels, loss, scaled_loss
+            
+        metrics = {"train_loss_total": total_loss}
         for k, v in exit_losses.items():
             metrics[f"train_loss_exit_{k}"] = v
             
@@ -124,10 +157,11 @@ class Trainer:
 
     def val_step(self) -> Dict[str, float]:
         """Evaluate the model on the validation set."""
+        import torch.nn.functional as F
         self.model.eval()
         
         total_val_loss = 0.0
-        exit_val_losses = {k: 0.0 for k in EXIT_CHECKPOINTS}
+        exit_val_losses = {k: 0.0 for k in self.model.exit_checkpoints}
         num_batches = 0
         
         weights = self.get_phase_weights()
@@ -137,12 +171,34 @@ class Trainer:
                 batch = batch.to(self.device)
                 
                 with torch.amp.autocast(device_type=self.device.type, dtype=self.dtype, enabled=(self.device.type == "cuda")):
-                    logits_dict = self.model(batch)
-                    loss, exit_losses = multi_exit_loss(logits_dict, batch, weights, EXIT_CHECKPOINTS)
+                    # Get hidden states and project one by one to save memory during validation too!
+                    hidden_states_dict = self.model(batch, return_hidden_states=True)
                     
-                total_val_loss += loss.item()
-                for k, v in exit_losses.items():
-                    exit_val_losses[k] += v
+                    batch_loss = 0.0
+                    for i, exit_k in enumerate(self.model.exit_checkpoints):
+                        if exit_k not in hidden_states_dict:
+                            continue
+                        h = hidden_states_dict.pop(exit_k)
+                        weight = weights[i]
+                        
+                        h_norm = self.model.shared_lm_head_norm(h)
+                        logits = self.model.lm_head(h_norm)
+                        
+                        shift_logits = logits[..., :-1, :].contiguous()
+                        shift_labels = batch[..., 1:].contiguous()
+                        
+                        loss = F.cross_entropy(
+                            shift_logits.view(-1, shift_logits.size(-1)),
+                            shift_labels.view(-1),
+                            ignore_index=-100,
+                        )
+                        
+                        exit_val_losses[exit_k] += loss.item()
+                        batch_loss += loss.item() * weight
+                        
+                        del h, h_norm, logits, shift_logits, shift_labels, loss
+                        
+                total_val_loss += batch_loss
                 num_batches += 1
                 
                 # Limit validation batches for speed during PoC
