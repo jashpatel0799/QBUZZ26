@@ -122,7 +122,7 @@ DATASET_CONFIG = {
             "path": "wikitext",
             "name": "wikitext-103-raw-v1",
             "split": "train",
-            "streaming": False,
+            "streaming": True,
             "num_samples": None,  # Use full dataset
             "text_field": "text",
         },
