@@ -44,7 +44,8 @@ def get_streaming_dataset(name: str, config: dict, tokenizer: AutoTokenizer):
     ds = ds.map(
         tokenize_fn,
         batched=True,
-        remove_columns=list(ds.features.keys()) if hasattr(ds, 'features') else [text_field],
+        remove_columns=list(ds.features.keys()) if getattr(ds, 'features', None) is not None else [text_field],
+
     )
     return ds
 
