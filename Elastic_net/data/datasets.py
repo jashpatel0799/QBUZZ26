@@ -22,6 +22,7 @@ def get_streaming_dataset(name: str, config: dict, tokenizer: AutoTokenizer):
         name=config.get("name"),
         split=config["split"],
         streaming=config["streaming"],
+        trust_remote_code=True
     )
     
     # Take only the required number of samples if specified
@@ -74,6 +75,7 @@ def load_eval_data(tokenizer: AutoTokenizer, split: str = "val"):
         name=config.get("name"),
         split=config["split"],
         streaming=False,  # Load eval sets into memory
+        trust_remote_code=True
     )
     
     text_field = config["text_field"]
