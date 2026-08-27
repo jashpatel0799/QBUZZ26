@@ -74,7 +74,7 @@ TRAIN_CONFIG = {
     "max_seq_len": MODEL_CONFIG["max_seq_len"],
     "batch_size": 4,               # Per-GPU batch size
     "grad_accumulation_steps": 2,  # Effective batch = 8 × 4 = 32
-    "lr": 3e-4,                    # Peak learning rate
+    "lr": 1e-3,                    # Peak learning rate
     "lr_scheduler": "cosine",      # Cosine decay with warmup
     "warmup_steps": 500,           # Linear warmup steps
     "total_steps": 20_000,         # Total training steps
