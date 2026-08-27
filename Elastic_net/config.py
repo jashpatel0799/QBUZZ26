@@ -72,7 +72,7 @@ STOCHASTIC_DEPTH_RATE = 0.1     # Max drop rate for deepest layer (only used if 
 # ============================================================================
 TRAIN_CONFIG = {
     "max_seq_len": MODEL_CONFIG["max_seq_len"],
-    "batch_size": 4,               # Per-GPU batch size
+    "batch_size": 8,               # Per-GPU batch size
     "grad_accumulation_steps": 2,  # Effective batch = 8 × 4 = 32
     "lr": 5e-4,                    # Peak learning rate
     "lr_scheduler": "cosine",      # Cosine decay with warmup
